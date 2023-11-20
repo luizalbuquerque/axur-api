@@ -5,6 +5,7 @@ import axururlapi.dto.CrawlResult;
 import axururlapi.dto.KeywordRequest;
 import axururlapi.service.WebCrawlerService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,10 +21,17 @@ public class WebCrawlerController {
         return ResponseEntity.ok(new CrawlResponse(crawlId));
     }
 
+
     @GetMapping("/crawl/{id}")
     public ResponseEntity<?> getCrawlResults(@PathVariable String id) {
-        CrawlResult result = webCrawlerService.getCrawlResults(id);
-        return ResponseEntity.ok(result);
+        try {
+            CrawlResult result = webCrawlerService.getCrawlResults(id);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body("Error: " + e.getMessage());
+        }
     }
+
 
 }

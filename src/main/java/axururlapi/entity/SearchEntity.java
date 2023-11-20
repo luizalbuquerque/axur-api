@@ -25,7 +25,7 @@ public class SearchEntity {
     @NotNull(message = "Search status cannot be null")
     private SearchStatus searchStatus;
 
-    @ElementCollection
+    @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "search_results", joinColumns = @JoinColumn(name = "search_id"))
     @Column(name = "url")
     private List<String> urls;

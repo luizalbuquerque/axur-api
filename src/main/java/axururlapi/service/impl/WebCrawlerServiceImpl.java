@@ -6,6 +6,8 @@ import axururlapi.enun.SearchStatus;
 import axururlapi.repository.SearchRepository;
 import axururlapi.service.WebCrawlerService;
 import jakarta.annotation.PreDestroy;
+import jakarta.transaction.Transactional;
+import org.jsoup.HttpStatusException;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -30,6 +32,8 @@ public class WebCrawlerServiceImpl implements WebCrawlerService {
     @Value("${base.url}")
     private String baseUrl;
 
+    private static final int MAX_URLS = 10; // Número máximo de URLs para salvar
+
     private static final int MAX_DEPTH = 5; // Definir um limite para a profundidade do rastreamento
     private final ExecutorService executorService = Executors.newFixedThreadPool(10);
 
@@ -49,6 +53,7 @@ public class WebCrawlerServiceImpl implements WebCrawlerService {
     }
 
     @Async
+    @Transactional
     protected void performCrawling(String searchId, String keyword) {
         try {
             crawlPage(baseUrl, keyword, searchId);
@@ -71,27 +76,39 @@ public class WebCrawlerServiceImpl implements WebCrawlerService {
         crawlPageRecursive(url, keyword, searchId, 0, visitedUrls);
     }
 
-    private void crawlPageRecursive(String url, String keyword, String searchId, int depth, Set<String> visitedUrls) throws IOException {
-
+    private void crawlPageRecursive(String url, String keyword, String searchId, int depth, Set<String> visitedUrls) {
         if (depth > MAX_DEPTH || visitedUrls.contains(url)) {
             return;
         }
 
         visitedUrls.add(url);
 
-        Document doc = Jsoup.connect(url).get();
-        if (doc.text().toLowerCase().contains(keyword.toLowerCase())) {
-            addUrlToSearch(searchId, url);
-        }
-
-        Elements links = doc.select("a[href]");
-        for (Element link : links) {
-            String nextUrl = link.attr("abs:href");
-            if (shouldCrawlUrl(url, nextUrl) && !visitedUrls.contains(nextUrl)) {
-                crawlPageRecursive(nextUrl, keyword, searchId, depth + 1, visitedUrls);
+        try {
+            Document doc = Jsoup.connect(url).timeout(10000).get(); // Definindo um timeout
+            if (doc.text().toLowerCase().contains(keyword.toLowerCase())) {
+                addUrlToSearch(searchId, url);
             }
+
+            Elements links = doc.select("a[href]");
+            for (Element link : links) {
+                String nextUrl = link.attr("abs:href");
+                if (shouldCrawlUrl(url, nextUrl) && !visitedUrls.contains(nextUrl)) {
+                    crawlPageRecursive(nextUrl, keyword, searchId, depth + 1, visitedUrls);
+                }
+            }
+        } catch (HttpStatusException e) {
+            if (e.getStatusCode() == 404) {
+                System.out.println("Página não encontrada: " + url); // Tratamento para erro 404
+            } else {
+                // Outros erros de estado HTTP
+                System.out.println("Erro de estado HTTP " + e.getStatusCode() + " para URL: " + url);
+            }
+        } catch (IOException e) {
+            // Tratamento para outras exceções IOException
+            System.out.println("Erro ao acessar a URL: " + url + ". Erro: " + e.getMessage());
         }
     }
+
 
     private boolean shouldCrawlUrl(String baseUrl, String nextUrl) {
         // Verificar se o próximo URL está no mesmo domínio que a URL base
@@ -106,16 +123,21 @@ public class WebCrawlerServiceImpl implements WebCrawlerService {
         }
     }
 
-    private synchronized void addUrlToSearch(String searchId, String url) {
+    @Transactional
+    public synchronized void addUrlToSearch(String searchId, String url) {
         SearchEntity searchEntity = searchRepository.findById(searchId)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid search ID"));
-        List<String> urls = searchEntity.getUrls();
-        if (urls == null) {
-            urls = new ArrayList<>();
+
+        if (searchEntity.getUrls() == null) {
+            searchEntity.setUrls(new ArrayList<>());
         }
-        urls.add(url);
-        searchEntity.setUrls(urls);
-        searchRepository.save(searchEntity);
+
+        List<String> urls = searchEntity.getUrls();
+
+        if (urls.size() < MAX_URLS) {
+            urls.add(url);
+            searchRepository.save(searchEntity);
+        }
     }
 
     private String generateUniqueId() {
@@ -129,7 +151,7 @@ public class WebCrawlerServiceImpl implements WebCrawlerService {
         return new CrawlResult(
                 search.getId(),
                 search.getSearchStatus().toString(),
-                search.getUrls() // As URLs encontradas até agora
+                search.getUrls()
         );
     }
 
